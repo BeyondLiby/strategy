@@ -1,0 +1,14 @@
+https://alphapai-web.rabyte.cn/reading/home/stock?id=STZ.US&name=%E6%98%9F%E5%BA%A7%E5%93%81%E7%89%8C-A
+https://alphapai-web.rabyte.cn/reading/home/stock?id=INTC.US&name=%E8%8B%B1%E7%89%B9%E5%B0%94
+https://alphapai-web.rabyte.cn/reading/home/stock?id=SNDK.US&name=SanDiskCorp
+https://alphapai-web.rabyte.cn/reading/home/stock?id=MU.US&name=%E7%BE%8E%E5%85%89%E7%A7%91%E6%8A%80
+https://alphapai-web.rabyte.cn/reading/home/stock?id=PG.US&name=%E5%AE%9D%E6%B4%81
+https://alphapai-web.rabyte.cn/reading/home/stock?id=VRT.US&name=VertivHoldingsCo.ClassA
+https://alphapai-web.rabyte.cn/reading/home/stock?id=AVAV.US&name=AeroVironment,Inc.
+https://alphapai-web.rabyte.cn/reading/home/stock?id=FCX.US&name=%E8%87%AA%E7%94%B1%E6%B8%AF%E9%BA%A6%E5%85%8B%E8%8E%AB%E5%85%B0
+https://alphapai-web.rabyte.cn/reading/home/stock?id=NET.US&name=CloudflareIncClassA
+https://alphapai-web.rabyte.cn/reading/home/stock?id=VELO.US&name=Velo3D,Inc.
+https://alphapai-web.rabyte.cn/reading/home/stock?id=WMT.US&name=%E6%B2%83%E5%B0%94%E7%8E%9B
+https://alphapai-web.rabyte.cn/reading/home/stock?id=BHP.US&name=%E5%BF%85%E5%92%8C%E5%BF%85%E6%8B%93
+https://alphapai-web.rabyte.cn/reading/home/stock?id=NYT.US&name=%E7%BA%BD%E7%BA%A6%E6%97%B6%E6%8A%A5
+https://alphapai-web.rabyte.cn/reading/home/stock?id=XOM.US&name=%E5%9F%83%E5%85%8B%E6%A3%AE%E7%BE%8E%E5%AD%9A

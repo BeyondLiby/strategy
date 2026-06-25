@@ -1,0 +1,25 @@
+{
+  "name": "alpha-pai-news-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "login": "node src/auth/manual-login.js",
+    "login:check": "node src/auth/check-login.js",
+    "login:auto": "node src/auth/auto-login.js",
+    "extract": "node src/latest-news/extract.js",
+    "extract:concurrent": "node src/latest-news/extract.js --concurrency 2",
+    "report": "node src/latest-news/report.js",
+    "daily": "node src/latest-news/update-and-report.js",
+    "fof99:login": "node src/fof99/manual-login.js",
+    "fof99:extract": "node src/fof99/extract-net-values.js",
+    "fof99:test-pages": "node src/fof99/test-pagination.js",
+    "fof99:record-filter": "node src/fof99/record-filter.js",
+    "probe": "node src/latest-news/probe.js",
+    "stocks:import": "node src/latest-news/import-stock-urls.js",
+    "codegen": "playwright codegen --channel=msedge"
+  },
+  "dependencies": {
+    "playwright": "^1.50.0"
+  }
+}

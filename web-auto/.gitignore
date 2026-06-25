@@ -1,0 +1,6 @@
+runtime/
+output/
+outputs/
+downloads/
+*.log
+node_modules/

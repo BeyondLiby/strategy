@@ -1,0 +1,51 @@
+{
+  "inputCsv": "data/stocks.csv",
+  "outputDir": "output/latest-news",
+  "authFile": "runtime/auth.json",
+  "authProfileDir": "runtime/alphapai-profile",
+  "credentialsFile": "runtime/alphapai-credentials.json",
+  "browser": {
+    "channel": "msedge",
+    "headless": true,
+    "timezoneId": "Asia/Shanghai",
+    "viewport": {
+      "width": 1440,
+      "height": 1200
+    }
+  },
+  "concurrency": {
+    "stocks": 1
+  },
+  "alphaPai": {
+    "origin": "https://alphapai-web.rabyte.cn",
+    "loginCheckPath": "/login",
+    "stockPath": "/reading/home/stock",
+    "detailPath": "/reading/home/point/detail"
+  },
+  "candidateRules": {
+    "preferTypes": [39],
+    "summaryTypes": [82],
+    "typeNames": {
+      "31": "纪要",
+      "39": "研报",
+      "82": "外资观点"
+    },
+    "preferLatestDate": true,
+    "skipSummaryWhenSameDateReportExists": true
+  },
+  "selectors": {
+    "candidateLists": ".recent-tracking, .recent-data-list, .data-list",
+    "detailTitle": ".title-box--en .title, .title-box--zh, h1",
+    "detailSource": ".bottom-box .left",
+    "detailBodyModules": ".us-stock-abstract__module",
+    "detailBodyFallback": ".article-section, .detail-layout, .article",
+    "guideLayers": ".cp-guide-activity, .el-popover",
+    "copyButtons": [
+      "[aria-label*='复制']",
+      "[title*='复制']",
+      ".anticon-copy",
+      "button:has-text('复制')",
+      "text=复制"
+    ]
+  }
+}

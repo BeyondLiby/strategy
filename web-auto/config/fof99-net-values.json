@@ -1,0 +1,77 @@
+{
+  "authFile": "runtime/fof99-auth.json",
+  "credentialsFile": "runtime/fof99-credentials.json",
+  "outputDir": "output/fof99-net-values",
+  "fof99": {
+    "origin": "https://mp.fof99.com",
+    "startUrl": "https://mp.fof99.com/fund/all",
+    "loginCheckPath": "/login",
+    "detailPath": "/fund/view/"
+  },
+  "browser": {
+    "channel": "msedge",
+    "headless": true,
+    "viewport": {
+      "width": 1440,
+      "height": 1200
+    }
+  },
+  "session": {
+    "mode": "persistentProfile",
+    "profileDir": "runtime/fof99-profile",
+    "storageStateBackup": true
+  },
+  "incremental": {
+    "enabled": true
+  },
+  "resume": {
+    "skipCompleted": true,
+    "skipExistingComplete": false
+  },
+  "screenshots": {
+    "detail": false,
+    "failed": true
+  },
+  "concurrency": {
+    "detailPages": 2
+  },
+  "progress": {
+    "enabled": true
+  },
+  "delays": {
+    "listScrollMs": {
+      "min": 20,
+      "max": 70
+    },
+    "detailScrollMs": {
+      "min": 4,
+      "max": 11
+    },
+    "betweenProductsMs": {
+      "min": 300,
+      "max": 800
+    },
+    "betweenPagesMs": {
+      "min": 50,
+      "max": 120
+    },
+    "afterDetailOpenMs": {
+      "min": 150,
+      "max": 350
+    },
+    "workerStaggerMs": {
+      "min": 100,
+      "max": 300
+    }
+  },
+  "selectors": {
+    "guideLayers": ".el-popover, .ant-popover, .ant-modal-root, .ant-modal-wrap, .ant-modal-mask, .v-modal, .modal, [role='dialog']",
+    "productLinks": "a[href*='/fund/view/']",
+    "productNameFallback": "a, .el-link, .ant-table-cell a, td a",
+    "nextPageButtons": ".el-pagination .btn-next, .ant-pagination-next, button:has-text('下一页'), li[title='下一页']",
+    "disabledPageButton": ".is-disabled, .ant-pagination-disabled, [disabled], [aria-disabled='true']",
+    "platformNetValueTitle": "平台净值",
+    "tableRows": ".virtual-content > div, .virtual-content [class*='border-b'], tbody tr, .el-table__body tr, .ant-table-tbody tr",
+    "scrollContainers": ".virtual-content, .el-table__body-wrapper, .ant-table-body, .ant-table-content, .fund-detail, main, body"
+  }
+}
