@@ -4,3 +4,5 @@ outputs/
 downloads/
 *.log
 node_modules/
+__pycache__/
+*.pyc

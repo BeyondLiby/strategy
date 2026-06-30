@@ -26,7 +26,12 @@
   },
   "resume": {
     "skipCompleted": true,
-    "skipExistingComplete": false
+    "skipExistingComplete": false,
+    "skipNoNetValue": true,
+    "noNetValueConfirmations": 3
+  },
+  "retries": {
+    "netValue": 2
   },
   "screenshots": {
     "detail": false,

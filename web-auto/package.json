@@ -13,8 +13,11 @@
     "daily": "node src/latest-news/update-and-report.js",
     "fof99:login": "node src/fof99/manual-login.js",
     "fof99:extract": "node src/fof99/extract-net-values.js",
+    "fof99:retry-failed": "node src/fof99/retry-failed-net-values.js",
+    "fof99:loop": "node scripts/run-fof99-extract-loop.js",
     "fof99:test-pages": "node src/fof99/test-pagination.js",
     "fof99:record-filter": "node src/fof99/record-filter.js",
+    "fof99:analyze": "python src/fof99/analyze_net_values.py",
     "probe": "node src/latest-news/probe.js",
     "stocks:import": "node src/latest-news/import-stock-urls.js",
     "codegen": "playwright codegen --channel=msedge"

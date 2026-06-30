@@ -51,9 +51,10 @@ async function recoverLogin(page, config, rootDir, options) {
   }
 
   if (options.headless) {
+    const credentialsFile = config.credentialsFile || "runtime/fof99-credentials.json";
     throw new Error(
       "fof99 login expired and no credentials were found. Set FOF99_ACCOUNT/FOF99_PASSWORD, " +
-      "or create runtime/fof99-credentials.json, or run HEADLESS=false npm.cmd run fof99:extract for interactive login."
+      `or create ${credentialsFile}, or run with HEADLESS=false for interactive login.`
     );
   }
 

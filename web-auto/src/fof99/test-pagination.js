@@ -48,7 +48,7 @@ try {
   await ensureFof99LoggedIn(page, config, rootDir, { returnUrl: startUrl, headless });
   await ensurePageExists(page);
   await dismissGuides(page);
-  await applyPrivateSecuritiesFundFilterV2(page);
+  await applyPrivateSecuritiesFundFilterV3(page);
 
   for (let pageIndex = 1; pageIndex <= maxPages; pageIndex += 1) {
     await settle(page);
@@ -341,6 +341,133 @@ async function ensurePageExists(page) {
   if (page.url().includes("/404") || /^404\b/.test(text.trim())) {
     throw new Error(`页面不存在：${page.url()}`);
   }
+}
+
+async function applyPrivateSecuritiesFundFilterV3(page) {
+  const before = await readFof99PrivateFundListState(page);
+  if (before.isApplied) return;
+
+  let lastState = before;
+  let lastClick = null;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    const responsePromise = page.waitForResponse((response) => {
+      const request = response.request();
+      if (!response.url().includes("/fund/advancedList") || request.method() !== "POST") return false;
+      const postData = request.postData() || "";
+      try {
+        const body = JSON.parse(postData);
+        return Array.isArray(body.fundType) && body.fundType.includes(2);
+      } catch {
+        return postData.includes("\"fundType\":[2]");
+      }
+    }, { timeout: 20_000 }).catch(() => null);
+
+    lastClick = await clickPrivateSecuritiesFundCurTag(page);
+    if (!lastClick.ok) {
+      await page.waitForTimeout(700 * attempt);
+      continue;
+    }
+
+    await responsePromise;
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      lastState = await readFof99PrivateFundListState(page);
+      if (lastState.isApplied) return;
+      await page.waitForTimeout(500);
+    }
+  }
+
+  throw new Error(
+    "Failed to apply fof99 private securities fund filter: expected selected condition and totalItems < 400000; " +
+    `actual totalItems=${lastState.pagination?.totalItems ?? ""} totalPages=${lastState.pagination?.totalPages ?? ""} ` +
+    `selectedCondition=${lastState.selectedCondition || ""} first=${lastState.firstProduct || ""} ` +
+    `click=${JSON.stringify(lastClick || {})}`
+  );
+}
+
+async function readFof99PrivateFundListState(page) {
+  const [pagination, products, selectedCondition] = await Promise.all([
+    readPaginationState(page).catch(() => ({})),
+    readVisibleProducts(page).catch(() => []),
+    page.evaluate(() => {
+      const selectedText = "\u5df2\u9009\u6761\u4ef6";
+      const textOf = (element) => (element?.innerText || element?.textContent || "").replace(/\s+/g, " ").trim();
+      const visible = (element) => {
+        if (!element) return false;
+        const style = getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+      };
+      return [...document.querySelectorAll("div, section, span")]
+        .filter(visible)
+        .map((element) => {
+          const box = element.getBoundingClientRect();
+          return { text: textOf(element), top: box.top, length: textOf(element).length };
+        })
+        .filter((item) => item.text.includes(selectedText))
+        .sort((a, b) => a.length - b.length || a.top - b.top)[0]?.text || "";
+    }).catch(() => "")
+  ]);
+
+  const selected = selectedCondition.includes("\u57fa\u91d1\u7c7b\u578b") &&
+    selectedCondition.includes("\u79c1\u52df\u8bc1\u5238\u57fa\u91d1");
+  const totalItems = Number(pagination?.totalItems);
+  const filteredTotal = Number.isFinite(totalItems) && totalItems > 0 && totalItems < 400_000;
+  return {
+    pagination,
+    products,
+    selectedCondition,
+    firstProduct: products[0]?.name || "",
+    isApplied: selected && filteredTotal
+  };
+}
+
+async function clickPrivateSecuritiesFundCurTag(page) {
+  return page.evaluate(() => {
+    const privateText = "\u79c1\u52df\u8bc1\u5238\u57fa\u91d1";
+    const fundTypeText = "\u57fa\u91d1\u7c7b\u578b";
+    const textOf = (element) => (element?.innerText || element?.textContent || "").replace(/\s+/g, " ").trim();
+    const visible = (element) => {
+      if (!element) return false;
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+    };
+    const sortTopLeft = (a, b) => {
+      const ab = a.getBoundingClientRect();
+      const bb = b.getBoundingClientRect();
+      return ab.top - bb.top || ab.left - bb.left;
+    };
+    const findTag = () => [...document.querySelectorAll(".cur-tag")]
+      .filter(visible)
+      .filter((element) => textOf(element).includes(privateText))
+      .sort(sortTopLeft)[0];
+
+    let tag = findTag();
+    if (!tag) {
+      const tab = [...document.querySelectorAll("button, a, span, div")]
+        .filter(visible)
+        .filter((element) => textOf(element).includes(fundTypeText))
+        .sort(sortTopLeft)[0];
+      tab?.click();
+      tag = findTag();
+    }
+
+    if (!tag) return { ok: false, reason: "private securities fund cur-tag not found" };
+
+    const target = tag.querySelector(".icon-block") || tag;
+    target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    target.click();
+    return {
+      ok: true,
+      tagText: textOf(tag),
+      tagClass: String(tag.className || ""),
+      targetClass: String(target.className || "")
+    };
+  });
 }
 
 async function applyPrivateSecuritiesFundFilterV2(page) {

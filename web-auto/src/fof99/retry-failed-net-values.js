@@ -6,7 +6,13 @@ import { launchFof99Context } from "./persistent-context.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "../..");
+const args = parseArgs(process.argv.slice(2));
 const config = readJson(path.join(rootDir, "config/fof99-net-values.json"));
+config.authFile = args.authFile || process.env.FOF99_RETRY_AUTH_FILE || "runtime/fof99-fail-auth.json";
+config.credentialsFile = args.credentialsFile || process.env.FOF99_RETRY_CREDENTIALS_FILE || "runtime/fof99-credentials-fail.json";
+config.outputDir = args.outputDir || process.env.FOF99_RETRY_OUTPUT_DIR || "output/fof99-failed-retry";
+config.session ||= {};
+config.session.profileDir = args.profileDir || process.env.FOF99_RETRY_PROFILE_DIR || "runtime/fof99-fail-profile";
 const authPath = path.join(rootDir, config.authFile || "runtime/fof99-auth.json");
 const outputRoot = path.join(rootDir, config.outputDir || "output/fof99-net-values");
 const startUrl = config.fof99?.startUrl || "https://mp.fof99.com/fund/all";
@@ -14,12 +20,10 @@ const origin = config.fof99?.origin || "https://mp.fof99.com";
 const detailPath = config.fof99?.detailPath || "/fund/view/";
 const selectors = config.selectors || {};
 const delays = config.delays || {};
-const args = parseArgs(process.argv.slice(2));
 const headless = process.env.HEADLESS !== "false" && config.browser?.headless !== false;
+const failedFrom = args.failedFrom || process.env.FOF99_FAILED_FROM || "";
 const maxPages = Number(args.maxPages || process.env.MAX_PAGES || 0);
 const maxProducts = Number(args.maxProducts || process.env.MAX_PRODUCTS || 0);
-const startPage = Math.max(1, Number(args.startPage || process.env.FOF99_START_PAGE || 1));
-const cutoffDateFallback = args.cutoffDateFallback !== "false" && process.env.FOF99_CUTOFF_DATE_FALLBACK !== "false";
 const incremental = args.full !== "true" && process.env.FOF99_FULL !== "true" && config.incremental?.enabled !== false;
 const skipCompleted = args.rerunCompleted !== "true" && process.env.FOF99_RERUN_COMPLETED !== "true" && config.resume?.skipCompleted !== false;
 const skipExisting = args.skipExisting === "true" || process.env.FOF99_SKIP_EXISTING === "true" || config.resume?.skipExistingComplete === true;
@@ -35,8 +39,7 @@ const runDate = new Date().toISOString().slice(0, 10);
 const resumePath = path.join(outputRoot, "resume-state.json");
 
 fs.mkdirSync(outputRoot, { recursive: true });
-const runId = args.runId || process.env.FOF99_RUN_ID || timestampForFile(new Date());
-const appendLog = args.appendLog === "true" || process.env.FOF99_APPEND_LOG === "true";
+const runId = timestampForFile(new Date());
 const logDir = path.join(outputRoot, "logs");
 fs.mkdirSync(logDir, { recursive: true });
 const liveRunLogPath = path.join(logDir, `run-log-${runId}.csv`);
@@ -49,11 +52,9 @@ context.setDefaultTimeout(30_000);
 const logHeader = ["time", "status", "productName", "productUrl", "detail", "errorName", "screenshot", "jsonPath"];
 const failedHeader = ["time", "productName", "productUrl", "errorName", "errorMessage", "screenshot", "jsonPath"];
 const logRows = [logHeader];
-initCsv(liveRunLogPath, logHeader, { append: appendLog });
-initCsv(liveFailedLogPath, failedHeader, { append: appendLog });
-if (appendLog) console.log(`[log] append mode enabled for runId=${runId}`);
-if (startPage > 1) console.log(`[startPage] will fast-forward to page ${startPage}`);
-console.log(`[log] live run log: ${liveRunLogPath}`);;
+initCsv(liveRunLogPath, logHeader);
+initCsv(liveFailedLogPath, failedHeader);
+console.log(`[log] live run log: ${liveRunLogPath}`);
 console.log(`[log] live failed log: ${liveFailedLogPath}`);
 const metadataHeaders = [
   "primaryStrategy",
@@ -82,83 +83,22 @@ const resumeState = loadResumeState();
 const progress = createProgress();
 
 try {
+  if (!failedFrom) {
+    throw new Error("Missing --failedFrom <csv>. Pass a failed-products CSV or run-log CSV.");
+  }
+
+  const failedProducts = loadProductsFromCsv(failedFrom);
+  const productsToRetry = maxProducts ? failedProducts.slice(0, maxProducts) : failedProducts;
+  progress.setTarget(productsToRetry.length);
+
   const page = await context.newPage();
   await gotoReady(page, startUrl);
   await ensureFof99LoggedIn(page, config, rootDir, { returnUrl: startUrl, headless });
+  await page.close().catch(() => {});
 
-  await ensurePageExists(page);
-  await dismissGuides(page);
-  await applyPrivateSecuritiesFundFilterV3(page);
-  await ensureListHasProductsForCutoffDate(page, "after filter");
-
-  let pageIndex = 1;
-  while (true) {
-    await settle(page);
-    await dismissGuides(page);
-
-    const pagination = await readPaginationState(page);
-    const currentPage = Number.isFinite(pagination.currentPage) ? pagination.currentPage : pageIndex;
-    progress.setPage(currentPage, pagination);
-
-    if (currentPage < startPage) {
-      const nextResult = await goNextPage(page);
-      if (!nextResult.moved) {
-        log("stopped", { name: `page-${currentPage}`, url: page.url() }, nextResult.reason || "no next page");
-        break;
-      }
-      pageIndex = currentPage + 1;
-      continue;
-    }
-
-    let products = await collectProductsOnCurrentPage(page);
-    if (!products.length) {
-      const recovered = await ensureListHasProductsForCutoffDate(page, `page-${currentPage}`);
-      if (recovered.changed) {
-        products = await collectProductsOnCurrentPage(page);
-      }
-    }
-    if (!products.length) {
-      log("stopped", { name: `page-${pageIndex}`, url: page.url() }, "no product links");
-      break;
-    }
-
-    const pageProducts = [];
-    for (const product of products) {
-      if (seenProductUrls.has(product.url)) continue;
-      if (maxProducts && seenProductUrls.size >= maxProducts) break;
-      seenProductUrls.add(product.url);
-      progress.addDiscovered(1);
-      if (skipNoNetValue && isKnownNoNetValue(product)) {
-        progress.skipped(product, "skipped", "known no platform net value");
-        log("skipped", product, "known no platform net value");
-        continue;
-      }
-      if ((skipExisting || (skipCompleted && isCompletedInCurrentRun(product))) && appendCachedProductIfComplete(product)) {
-        const detail = skipExisting ? "existing complete result" : "cached complete result";
-        progress.skipped(product, "skipped", detail);
-        log("skipped", product, detail);
-        continue;
-      }
-      pageProducts.push(product);
-    }
-
-    await processProducts(context, pageProducts);
-
-    if (maxProducts && seenProductUrls.size >= maxProducts) {
-      log("stopped", { name: `page-${pageIndex}`, url: page.url() }, `maxProducts reached: ${maxProducts}`);
-      break;
-    }
-    if (maxPages && pageIndex >= maxPages) {
-      log("stopped", { name: `page-${pageIndex}`, url: page.url() }, `maxPages reached: ${maxPages}`);
-      break;
-    }
-    const nextPageResult = await goNextPage(page);
-    if (!nextPageResult.moved) {
-      log("stopped", { name: `page-${pageIndex}`, url: page.url() }, nextPageResult.reason || "no next page");
-      break;
-    }
-    pageIndex = currentPage + 1;
-  }
+  console.log(`[mode] retrying ${productsToRetry.length} failed fof99 products from ${failedFrom}`);
+  console.log(`[mode] profile=${config.session.profileDir} credentials=${config.credentialsFile} output=${config.outputDir}`);
+  await processProducts(context, productsToRetry);
 } finally {
   writeCsv(path.join(outputRoot, "net-values.csv"), allRows);
   writeCsv(path.join(outputRoot, "product-metadata.csv"), metadataRows);
@@ -185,7 +125,7 @@ async function processProducts(context, products) {
 }
 
 async function extractOneProduct(context, product) {
-  progress.start(product);
+  progress.start(product.name);
   const page = await context.newPage();
   const productDir = path.join(outputRoot, safeName(product.name || product.id || "unknown"));
   fs.mkdirSync(productDir, { recursive: true });
@@ -233,7 +173,7 @@ async function extractOneProduct(context, product) {
       : `${rows.length} net value rows`;
     log("ok", product, detail);
     markCompleted(product, detail);
-    progress.done(product, "ok", detail);
+    progress.done(product.name, true);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const errorName = error instanceof Error ? error.name : "Error";
@@ -242,7 +182,7 @@ async function extractOneProduct(context, product) {
       const detail = `${message} (confirmation ${noNetValueState.confirmations}/${noNetValueConfirmations})`;
       if (noNetValueState.confirmed) {
         log("no-net-value", product, detail, { errorName, jsonPath });
-        progress.skipped(product, "no-net-value", detail);
+        progress.skipped(product.name);
         return;
       }
 
@@ -252,7 +192,7 @@ async function extractOneProduct(context, product) {
         await page.screenshot({ path: failedScreenshotPath, fullPage: true }).catch(() => {});
       }
       log("suspected-no-net-value", product, detail, { errorName, screenshot: failedScreenshotPath, jsonPath });
-      progress.done(product, "suspected-no-net-value", detail);
+      progress.done(product.name, false);
       return;
     }
     let failedScreenshotPath = "";
@@ -261,7 +201,7 @@ async function extractOneProduct(context, product) {
       await page.screenshot({ path: failedScreenshotPath, fullPage: true }).catch(() => {});
     }
     log("failed", product, message, { errorName, screenshot: failedScreenshotPath, jsonPath });
-    progress.done(product, "failed", message);
+    progress.done(product.name, false);
   } finally {
     await page.close().catch(() => {});
   }
@@ -285,169 +225,6 @@ async function collectProductsOnCurrentPage(page) {
   await page.evaluate(() => document.scrollingElement?.scrollTo(0, 0)).catch(() => {});
   await page.waitForTimeout(300);
   return [...products.values()];
-}
-
-async function ensureListHasProductsForCutoffDate(page, reason) {
-  if (!cutoffDateFallback) return { changed: false, reason: "disabled" };
-
-  const visibleProducts = await readVisibleProducts(page).catch(() => []);
-  if (visibleProducts.length) return { changed: false, reason: "products visible" };
-
-  const pageState = await readCutoffDateListState(page).catch(() => ({}));
-  if (!pageState.empty && pageState.productLinkCount > 0) return { changed: false, reason: "products present" };
-
-  const selected = await selectPreviousIndicatorCutoffDate(page);
-  if (!selected.changed) {
-    console.log(`[cutoff-date] no fallback date selected for ${reason}: ${selected.reason || "unknown"}`);
-    return selected;
-  }
-
-  log(
-    "cutoff-date-adjusted",
-    { name: reason || "list", url: page.url() },
-    `indicator cutoff date ${selected.fromDate || ""} -> ${selected.toDate || ""}`
-  );
-  console.log(`[cutoff-date] ${reason}: switched indicator cutoff date ${selected.fromDate || ""} -> ${selected.toDate || ""}`);
-  await waitForProductsAfterCutoffDateChange(page);
-  return selected;
-}
-
-async function readCutoffDateListState(page) {
-  return page.evaluate((payload) => {
-    const { detailPath } = payload;
-    const emptyText = "\u6682\u65e0\u6570\u636e";
-    const textOf = (element) => (element?.innerText || element?.textContent || "").replace(/\s+/g, " ").trim();
-    const visible = (element) => {
-      if (!element) return false;
-      const style = getComputedStyle(element);
-      const box = element.getBoundingClientRect();
-      return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
-    };
-    const productLinkCount = [...document.querySelectorAll(`a[href*='${detailPath}']`)].filter(visible).length;
-    const bodyText = textOf(document.body);
-    return {
-      productLinkCount,
-      empty: bodyText.includes(emptyText),
-      cutoffDate: readCurrentIndicatorCutoffDate(document)
-    };
-
-    function readCurrentIndicatorCutoffDate(root) {
-      const labelText = "\u6307\u6807\u8ba1\u7b97\u622a\u6b62\u65e5\u671f";
-      const labels = [...root.querySelectorAll("div, span, label")]
-        .filter(visible)
-        .filter((element) => textOf(element).includes(labelText))
-        .sort((a, b) => textOf(a).length - textOf(b).length);
-      for (const label of labels) {
-        let node = label;
-        for (let depth = 0; node && depth < 4; depth += 1, node = node.parentElement) {
-          const match = textOf(node).match(/\d{4}-\d{2}-\d{2}/);
-          if (match) return match[0];
-        }
-      }
-      return "";
-    }
-  }, { detailPath });
-}
-
-async function selectPreviousIndicatorCutoffDate(page) {
-  const opened = await page.evaluate(() => {
-    const labelText = "\u6307\u6807\u8ba1\u7b97\u622a\u6b62\u65e5\u671f";
-    const textOf = (element) => (element?.innerText || element?.textContent || "").replace(/\s+/g, " ").trim();
-    const visible = (element) => {
-      if (!element) return false;
-      const style = getComputedStyle(element);
-      const box = element.getBoundingClientRect();
-      return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
-    };
-    const labels = [...document.querySelectorAll("div, span, label")]
-      .filter(visible)
-      .filter((element) => textOf(element).includes(labelText))
-      .sort((a, b) => textOf(a).length - textOf(b).length);
-    const label = labels[0];
-    if (!label) return { ok: false, reason: "cutoff date label not found" };
-
-    let container = label;
-    for (let depth = 0; container && depth < 5; depth += 1, container = container.parentElement) {
-      const dates = [...container.querySelectorAll("span, div, input")]
-        .filter(visible)
-        .map((element) => ({ element, text: element.value || textOf(element) }))
-        .filter((item) => /\d{4}-\d{2}-\d{2}/.test(item.text))
-        .sort((a, b) => a.text.length - b.text.length);
-      const current = dates[0];
-      if (!current) continue;
-      const date = current.text.match(/\d{4}-\d{2}-\d{2}/)?.[0] || "";
-      const trigger = current.element.closest(".el-select, .ant-select, [role='combobox']") ||
-        current.element.closest("div, span") ||
-        current.element;
-      trigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-      trigger.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-      trigger.click();
-      return { ok: true, currentDate: date };
-    }
-    return { ok: false, reason: "current cutoff date trigger not found" };
-  });
-
-  if (!opened.ok) return { changed: false, reason: opened.reason };
-  await page.waitForTimeout(500);
-
-  const responsePromise = page.waitForResponse((response) => {
-    const request = response.request();
-    return request.method() === "POST" && response.url().includes("/fund/advancedList");
-  }, { timeout: 15_000 }).catch(() => null);
-
-  const clicked = await page.evaluate((currentDate) => {
-    const textOf = (element) => (element?.innerText || element?.textContent || "").replace(/\s+/g, " ").trim();
-    const visible = (element) => {
-      if (!element) return false;
-      const style = getComputedStyle(element);
-      const box = element.getBoundingClientRect();
-      return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
-    };
-    const items = [...document.querySelectorAll(".el-select-dropdown__item, .ant-select-item-option, [role='option'], li, div, span")]
-      .filter(visible)
-      .map((element) => {
-        const text = textOf(element);
-        const date = (text.match(/\d{4}-\d{2}-\d{2}/) || [])[0] || "";
-        const box = element.getBoundingClientRect();
-        return { element, text, date, top: box.top, left: box.left, length: text.length };
-      })
-      .filter((item) => item.date)
-      .sort((a, b) => a.top - b.top || a.left - b.left || a.length - b.length);
-    const uniqueDates = [...new Set(items.map((item) => item.date))].sort((a, b) => b.localeCompare(a));
-    const fallbackDate = uniqueDates.find((date) => currentDate ? date < currentDate : date !== uniqueDates[0]);
-    if (!fallbackDate) {
-      return { ok: false, reason: `no previous date option found from ${currentDate || "unknown"}`, currentDate, dates: uniqueDates };
-    }
-    const target = items
-      .filter((item) => item.date === fallbackDate)
-      .sort((a, b) => {
-        const aScore = Number(/el-select-dropdown__item|ant-select-item-option/.test(String(a.element.className || ""))) * 10 - a.length;
-        const bScore = Number(/el-select-dropdown__item|ant-select-item-option/.test(String(b.element.className || ""))) * 10 - b.length;
-        return bScore - aScore;
-      })[0]?.element;
-    if (!target) return { ok: false, reason: `date option not clickable: ${fallbackDate}`, currentDate, dates: uniqueDates };
-    target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-    target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-    target.click();
-    return { ok: true, fromDate: currentDate || "", toDate: fallbackDate, dates: uniqueDates };
-  }, opened.currentDate || "");
-
-  if (!clicked.ok) return { changed: false, reason: clicked.reason, fromDate: clicked.currentDate || "" };
-  await responsePromise;
-  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
-  await page.waitForTimeout(1200);
-  await page.evaluate(() => document.scrollingElement?.scrollTo(0, 0)).catch(() => {});
-  return { changed: true, fromDate: clicked.fromDate, toDate: clicked.toDate };
-}
-
-async function waitForProductsAfterCutoffDateChange(page) {
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    const products = await readVisibleProducts(page).catch(() => []);
-    if (products.length) return true;
-    await page.waitForTimeout(500);
-  }
-  return false;
 }
 
 async function collectPlatformNetValuesWithRetry(page, options = {}) {
@@ -1245,13 +1022,8 @@ function parseArgs(args) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (!arg.startsWith("--")) continue;
-    const eqIndex = arg.indexOf("=");
-    if (eqIndex > 2) {
-      result[arg.slice(2, eqIndex)] = arg.slice(eqIndex + 1);
-    } else {
-      result[arg.slice(2)] = args[index + 1] || "";
-      index += 1;
-    }
+    result[arg.slice(2)] = args[index + 1] || "";
+    index += 1;
   }
   return result;
 }
@@ -1305,6 +1077,33 @@ function parseCsv(content) {
   return rows
     .filter((values) => values.some((value) => value !== ""))
     .map((values) => Object.fromEntries(header.map((key, index) => [key, values[index] || ""])));
+}
+
+function loadProductsFromCsv(filePath) {
+  const resolvedPath = path.isAbsolute(filePath) ? filePath : path.join(rootDir, filePath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`Failed products CSV does not exist: ${resolvedPath}`);
+  }
+
+  const rows = parseCsv(fs.readFileSync(resolvedPath, "utf8"));
+  const products = [];
+  const seen = new Set();
+  for (const row of rows) {
+    if (row.status && ["ok", "skipped", "stopped"].includes(row.status)) continue;
+    const url = row.productUrl || row.url || row.detailUrl || "";
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    products.push({
+      name: row.productName || row.name || url.split("/").filter(Boolean).pop() || "unknown",
+      url,
+      id: url.split("/").filter(Boolean).pop() || ""
+    });
+  }
+
+  if (!products.length) {
+    throw new Error(`No failed product URLs found in CSV: ${resolvedPath}`);
+  }
+  return products;
 }
 
 function readExistingRows(filePath) {
@@ -1481,8 +1280,7 @@ function writeCsv(filePath, rows) {
   fs.writeFileSync(filePath, rows.map((row) => row.map(csvCell).join(",")).join("\n") + "\n", "utf8");
 }
 
-function initCsv(filePath, header, options = {}) {
-  if (options.append && fs.existsSync(filePath) && fs.statSync(filePath).size > 0) return;
+function initCsv(filePath, header) {
   fs.writeFileSync(filePath, header.map(csvCell).join(",") + "\n", "utf8");
 }
 
@@ -1544,18 +1342,16 @@ function log(status, product, detail, extra = {}) {
 }
 
 function createProgress() {
-  const existingStatusByUrl = appendLog ? loadProgressStatusByUrl(liveRunLogPath) : new Map();
-  const initialCounts = countProgressStatuses(existingStatusByUrl);
   const state = {
     page: 1,
     discovered: 0,
     completed: 0,
-    ok: initialCounts.ok,
-    failed: initialCounts.failed,
-    skipped: initialCounts.skipped,
-    statusByUrl: existingStatusByUrl,
+    ok: 0,
+    failed: 0,
+    skipped: 0,
     active: new Set(),
     pageTotal: 0,
+    targetProducts: 0,
     totalItems: 0,
     pageSize: 0,
     lastLineLength: 0,
@@ -1566,8 +1362,8 @@ function createProgress() {
   const enabled = progressEnabled && Boolean(process.stdout.isTTY);
   const formatLine = () => {
     const pageTarget = resolvePageTarget(state.pageTotal);
-    const usePageProgress = !maxProducts && pageTarget > 0;
-    const total = usePageProgress ? pageTarget : maxProducts || Math.max(state.discovered, state.completed + state.active.size, 1);
+    const usePageProgress = !state.targetProducts && !maxProducts && pageTarget > 0;
+    const total = usePageProgress ? pageTarget : state.targetProducts || maxProducts || Math.max(state.discovered, state.completed + state.active.size, 1);
     const completed = usePageProgress ? Math.min(state.page, total) : state.completed;
     const width = 20;
     const ratio = Math.min(1, completed / total);
@@ -1580,7 +1376,7 @@ function createProgress() {
     const remaining = Math.max(0, total - completed);
     const etaSeconds = avgBase ? Math.round(avgSeconds * remaining) : 0;
     const current = [...state.active].slice(-2).join(" | ");
-    const totalLabel = usePageProgress || maxProducts ? String(total) : `${total}?`;
+    const totalLabel = usePageProgress || maxProducts || state.targetProducts ? String(total) : `${total}?`;
     const avgUnit = usePageProgress ? "page" : "item";
     const line = [
       `[${bar}]`,
@@ -1594,7 +1390,7 @@ function createProgress() {
       `skip=${state.skipped}`,
       `active=${state.active.size}`,
       `page=${formatPageLabel(state)}`,
-      usePageProgress ? `session=${state.completed}/${state.discovered || "?"}` : "",
+      usePageProgress ? `items=${state.completed}/${state.discovered || "?"}` : "",
       current ? `current=${truncate(current, 28)}` : ""
     ].filter(Boolean).join(" ");
     return line;
@@ -1615,6 +1411,10 @@ function createProgress() {
   };
 
   return {
+    setTarget(count) {
+      state.targetProducts = Math.max(0, Number(count) || 0);
+      render();
+    },
     setPage(page, pagination = {}) {
       state.page = page;
       if (Number.isFinite(pagination.totalPages) && pagination.totalPages > 0) {
@@ -1635,92 +1435,32 @@ function createProgress() {
       state.discovered += count;
       render();
     },
-    start(productOrName) {
-      state.active.add(productNameOf(productOrName));
+    start(name) {
+      state.active.add(name || "unknown");
       render();
     },
-    done(productOrName, status, detail = "") {
-      state.active.delete(productNameOf(productOrName));
+    done(name, ok) {
+      state.active.delete(name || "unknown");
       state.completed += 1;
-      applyProgressStatus(state, productOrName, status, detail);
+      if (ok) state.ok += 1;
+      else state.failed += 1;
       render();
     },
-    skipped(productOrName, status = "skipped", detail = "") {
-      state.active.delete(productNameOf(productOrName));
+    skipped() {
       state.completed += 1;
-      applyProgressStatus(state, productOrName, status, detail);
+      state.skipped += 1;
       render();
     },
     finish() {
       if (!enabled) {
-        console.log(`[summary] sessionProcessed=${state.completed} totalOk=${state.ok} totalFailed=${state.failed} totalSkipped=${state.skipped} elapsed=${formatDuration(Math.round((Date.now() - state.startedAt) / 1000))}`);
+        console.log(`[summary] processed=${state.completed} ok=${state.ok} failed=${state.failed} skipped=${state.skipped} elapsed=${formatDuration(Math.round((Date.now() - state.startedAt) / 1000))}`);
         return;
       }
       render();
       process.stdout.write("\n");
-      console.log(`[summary] sessionProcessed=${state.completed} totalOk=${state.ok} totalFailed=${state.failed} totalSkipped=${state.skipped} elapsed=${formatDuration(Math.round((Date.now() - state.startedAt) / 1000))}`);
+      console.log(`[summary] processed=${state.completed} ok=${state.ok} failed=${state.failed} skipped=${state.skipped} elapsed=${formatDuration(Math.round((Date.now() - state.startedAt) / 1000))}`);
     }
   };
-}
-
-function loadProgressStatusByUrl(filePath) {
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) return new Map();
-  const statusByUrl = new Map();
-  for (const row of parseCsv(fs.readFileSync(filePath, "utf8"))) {
-    applyProgressStatusToMap(statusByUrl, {
-      url: row.productUrl,
-      name: row.productName
-    }, row.status, row.detail);
-  }
-  return statusByUrl;
-}
-
-function applyProgressStatus(state, productOrName, status, detail = "") {
-  const before = countProgressStatuses(state.statusByUrl);
-  applyProgressStatusToMap(state.statusByUrl, productOrName, status, detail);
-  const after = countProgressStatuses(state.statusByUrl);
-  state.ok += after.ok - before.ok;
-  state.failed += after.failed - before.failed;
-  state.skipped += after.skipped - before.skipped;
-}
-
-function applyProgressStatusToMap(statusByUrl, productOrName, status, detail = "") {
-  const url = productUrlOf(productOrName);
-  if (!url) return;
-  const bucket = progressStatusBucket(status, detail);
-  if (!bucket) return;
-  statusByUrl.set(url, bucket);
-}
-
-function countProgressStatuses(statusByUrl) {
-  const counts = { ok: 0, failed: 0, skipped: 0 };
-  for (const status of statusByUrl.values()) {
-    if (status === "ok") counts.ok += 1;
-    else if (status === "failed") counts.failed += 1;
-    else if (status === "skipped") counts.skipped += 1;
-  }
-  return counts;
-}
-
-function progressStatusBucket(status, detail = "") {
-  if (status === "ok") return "ok";
-  if (status === "failed" || status === "suspected-no-net-value") return "failed";
-  if (status === "no-net-value") return "skipped";
-  if (status === "skipped") {
-    if (/existing complete result|cached complete result/.test(detail)) return "ok";
-    return "skipped";
-  }
-  return "";
-}
-
-function productNameOf(productOrName) {
-  if (typeof productOrName === "string") return productOrName || "unknown";
-  return productOrName?.name || "unknown";
-}
-
-function productUrlOf(productOrName) {
-  if (typeof productOrName === "string") return "";
-  return productOrName?.url || "";
 }
 
 function resolvePageTarget(totalPages) {
